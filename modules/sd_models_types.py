@@ -32,3 +32,9 @@ class WebuiSdModel(LatentDiffusion):
 
     is_sd1: bool
     """True if the model's architecture is SD 1.x"""
+
+    is_svd: bool
+    """True if the model's architecture is SVD"""
+
+    is_svd_video_decoder: bool
+    """True if the model's VAE is SVD video decoder"""

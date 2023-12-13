@@ -358,11 +358,13 @@ def load_model_weights(model, checkpoint_info: CheckpointInfo, state_dict, timer
     if state_dict is None:
         state_dict = get_checkpoint_state_dict(checkpoint_info, timer)
 
-    model.is_sdxl = hasattr(model, 'conditioner')
+    model.is_svd = 'conditioner.embedders.0.open_clip.model.visual.ln_pre.weight' in state_dict.keys()
+    model.is_svd_video_decoder = 'first_stage_model.decoder.conv_out.time_mix_conv.bias' in state_dict.keys()
+    model.is_sdxl = not model.is_svd and hasattr(model, 'conditioner')
     model.is_sd2 = not model.is_sdxl and hasattr(model.cond_stage_model, 'model')
     model.is_sd1 = not model.is_sdxl and not model.is_sd2
     model.is_ssd = model.is_sdxl and 'model.diffusion_model.middle_block.1.transformer_blocks.0.attn1.to_q.weight' not in state_dict.keys()
-    if model.is_sdxl:
+    if model.is_sdxl or model.is_svd:
         sd_models_xl.extend_sdxl(model)
 
     if model.is_ssd:
@@ -504,11 +506,20 @@ def repair_config(sd_config):
         karlo_path = os.path.join(paths.models_path, 'karlo')
         sd_config.model.params.noise_aug_config.params.clip_stats_path = sd_config.model.params.noise_aug_config.params.clip_stats_path.replace("checkpoints/karlo_models", karlo_path)
 
+    if hasattr(sd_config.model, "conditioner_config"):
+        for i in range(len(sd_config.model.conditioner_config.params.emb_models)):
+            if sd_config.model.conditioner_config.params.emb_models[i].input_key == 'cond_frames' and not shared.xformers_available:
+                sd_config.model.conditioner_config.params.emb_models[i].params.encoder_config.params.ddconfig.attn_type = "vanilla"
+
+    if hasattr(sd_config.model, "network_config") and "VideoUNet" in sd_config.model.network_config.target and not shared.xformers_available:
+        sd_config.model.network_config.params.spatial_transformer_attn_type = "softmax"
+
 
 sd1_clip_weight = 'cond_stage_model.transformer.text_model.embeddings.token_embedding.weight'
 sd2_clip_weight = 'cond_stage_model.model.transformer.resblocks.0.attn.in_proj_weight'
 sdxl_clip_weight = 'conditioner.embedders.1.model.ln_final.weight'
 sdxl_refiner_clip_weight = 'conditioner.embedders.0.model.ln_final.weight'
+svd_clip_weight = 'conditioner.embedders.0.open_clip.model.visual.ln_pre.weight'
 
 
 class SdModelData:
@@ -616,7 +627,7 @@ def load_model(checkpoint_info=None, already_loaded_state_dict=None):
         state_dict = get_checkpoint_state_dict(checkpoint_info, timer)
 
     checkpoint_config = sd_models_config.find_checkpoint_config(state_dict, checkpoint_info)
-    clip_is_included_into_sd = any(x for x in [sd1_clip_weight, sd2_clip_weight, sdxl_clip_weight, sdxl_refiner_clip_weight] if x in state_dict)
+    clip_is_included_into_sd = any(x for x in [sd1_clip_weight, sd2_clip_weight, sdxl_clip_weight, sdxl_refiner_clip_weight, svd_clip_weight] if x in state_dict)
 
     timer.record("find config")
 
@@ -669,18 +680,20 @@ def load_model(checkpoint_info=None, already_loaded_state_dict=None):
     model_data.set_sd_model(sd_model)
     model_data.was_loaded_at_least_once = True
 
-    sd_hijack.model_hijack.embedding_db.load_textual_inversion_embeddings(force_reload=True)  # Reload embeddings after model load as they may or may not fit the model
+    if not sd_model.is_svd:
+        sd_hijack.model_hijack.embedding_db.load_textual_inversion_embeddings(force_reload=True)  # Reload embeddings after model load as they may or may not fit the model
 
-    timer.record("load textual inversion embeddings")
+        timer.record("load textual inversion embeddings")
 
     script_callbacks.model_loaded_callback(sd_model)
 
     timer.record("scripts callbacks")
 
-    with devices.autocast(), torch.no_grad():
-        sd_model.cond_stage_model_empty_prompt = get_empty_cond(sd_model)
+    if not sd_model.is_svd:
+        with devices.autocast(), torch.no_grad():
+            sd_model.cond_stage_model_empty_prompt = get_empty_cond(sd_model)
 
-    timer.record("calculate empty prompt")
+        timer.record("calculate empty prompt")
 
     print(f"Model loaded in {timer.summary()}.")
 

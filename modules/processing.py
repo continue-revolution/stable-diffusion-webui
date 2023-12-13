@@ -1536,3 +1536,56 @@ class StableDiffusionProcessingImg2Img(StableDiffusionProcessing):
 
     def get_token_merging_ratio(self, for_hr=False):
         return self.token_merging_ratio or ("token_merging_ratio" in self.override_settings and opts.token_merging_ratio) or opts.token_merging_ratio_img2img or opts.token_merging_ratio
+
+
+@dataclass(repr=False)
+class StableDiffusionProcessingImg2Vid(StableDiffusionProcessing):
+    cond_frames_without_noise: list = None
+    resize_mode: int = 0
+    denoising_strength: float = 0.75
+    motion_bucket_id: int = 127,
+    fps_id: int = 6,
+    cond_aug: float = 0.02,
+
+    cond_frames: list = field(default=None, init=False)
+
+    def init(self, all_prompts, all_seeds, all_subseeds):
+        self.sampler = sd_samplers.create_sampler(self.sampler_name, self.sd_model)
+        imgs = []
+        for img in self.cond_frames_without_noise:
+
+            # Save init image
+            if opts.save_init_img:
+                self.init_img_hash = hashlib.md5(img.tobytes()).hexdigest()
+                images.save_image(img, path=opts.outdir_init_images, basename=None, forced_filename=self.init_img_hash, save_to_dirs=False)
+
+            image = images.flatten(img, opts.img2img_background_color)
+
+            if self.resize_mode != 3:
+                image = images.resize_image(self.resize_mode, image, self.width, self.height)
+
+            image = np.array(image).astype(np.float32) / 255.0
+            image = np.moveaxis(image, 2, 0)
+
+            imgs.append(image)
+        if len(imgs) == 1:
+            batch_images = np.expand_dims(imgs[0], axis=0).repeat(self.batch_size, axis=0)
+
+        elif len(imgs) <= self.batch_size:
+            self.batch_size = len(imgs)
+            batch_images = np.array(imgs)
+        else:
+            raise RuntimeError(f"bad number of images passed: {len(imgs)}; expecting {self.batch_size} or less")
+
+        image = torch.from_numpy(batch_images)
+        image = image.to(shared.device, dtype=devices.dtype_vae)
+
+        if opts.sd_vae_encode_method != 'Full':
+            self.extra_generation_params['VAE Encoder'] = opts.sd_vae_encode_method
+
+        self.init_latent = images_tensor_to_samples(image, approximation_indexes.get(opts.sd_vae_encode_method), self.sd_model)
+        devices.torch_gc()
+
+        if self.resize_mode == 3:
+            self.init_latent = torch.nn.functional.interpolate(self.init_latent, size=(self.height // opt_f, self.width // opt_f), mode="bilinear")
+        

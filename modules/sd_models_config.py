@@ -13,6 +13,8 @@ config_default = shared.sd_default_config
 config_sd2 = os.path.join(sd_repo_configs_path, "v2-inference.yaml")
 config_sd2v = os.path.join(sd_repo_configs_path, "v2-inference-v.yaml")
 config_sd2_inpainting = os.path.join(sd_repo_configs_path, "v2-inpainting-inference.yaml")
+config_svd = os.path.join(sd_xl_repo_configs_path, "svd.yaml")
+config_svd_image_decoder = os.path.join(sd_xl_repo_configs_path, "svd_image_decoder.yaml")
 config_sdxl = os.path.join(sd_xl_repo_configs_path, "sd_xl_base.yaml")
 config_sdxl_refiner = os.path.join(sd_xl_repo_configs_path, "sd_xl_refiner.yaml")
 config_depth_model = os.path.join(sd_repo_configs_path, "v2-midas-inference.yaml")
@@ -70,6 +72,10 @@ def guess_model_config_from_state_dict(sd, filename):
     diffusion_model_input = sd.get('model.diffusion_model.input_blocks.0.0.weight', None)
     sd2_variations_weight = sd.get('embedder.model.ln_final.weight', None)
 
+    if sd.get('first_stage_model.decoder.conv_out.time_mix_conv.bias', None) is not None:
+        return config_svd
+    elif sd.get('conditioner.embedders.0.open_clip.model.visual.transformer.resblocks.29.mlp.c_proj.bias', None) is not None:
+        return config_svd_image_decoder
     if sd.get('conditioner.embedders.1.model.ln_final.weight', None) is not None:
         return config_sdxl
     if sd.get('conditioner.embedders.0.model.ln_final.weight', None) is not None:
